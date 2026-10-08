@@ -1,8 +1,41 @@
 #!/usr/bin/env bash
+# Default "Caelestia" session started by greetd after authentication.
+#
+# When uwsm is installed the compositor runs as a systemd user unit
+# (wayland-wm@Hyprland.service) with graphical-session.target, which is what
+# Caelestia Shell and portals expect. Set CAELESTIA_SESSION_UWSM=0 in
+# /etc/caelestia-greeter/session.env to force the plain start-hyprland path.
 set -euo pipefail
 
-if command -v start-hyprland >/dev/null 2>&1; then
-    exec start-hyprland
+session_env="${CAELESTIA_SESSION_ENV:-/etc/caelestia-greeter/session.env}"
+if [[ -r "$session_env" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$session_env"
+    set +a
 fi
 
-exec /usr/bin/Hyprland
+use_uwsm="${CAELESTIA_SESSION_UWSM:-1}"
+sessions_dir="${CAELESTIA_SESSION_WAYLAND_SESSIONS:-/usr/share/wayland-sessions}"
+
+command=()
+if [[ "$use_uwsm" != 0 ]] && command -v uwsm >/dev/null 2>&1; then
+    if [[ -r "$sessions_dir/hyprland.desktop" ]]; then
+        command=(uwsm start -e -D Hyprland hyprland.desktop)
+    else
+        command=(uwsm start -e -D Hyprland -- start-hyprland)
+    fi
+elif command -v start-hyprland >/dev/null 2>&1; then
+    command=(start-hyprland)
+else
+    command=(/usr/bin/Hyprland)
+fi
+
+# The greeter catalogue uses this to hide discovered sessions that would run
+# the identical command.
+if [[ "${1:-}" == "--print-command" ]]; then
+    printf '%s\n' "${command[@]}"
+    exit 0
+fi
+
+exec "${command[@]}"

@@ -3,6 +3,9 @@ set -euo pipefail
 
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export CAELESTIA_GREETER_PREVIEW=1
+# Preview is run from the repository, so point the catalogue at the
+# uninstalled session wrapper for duplicate detection.
+export CAELESTIA_GREETER_SESSION_SCRIPT="${CAELESTIA_GREETER_SESSION_SCRIPT:-$project_dir/scripts/caelestia-session}"
 
 user="${CAELESTIA_GREETER_USER:-$(id -un)}"
 export CAELESTIA_GREETER_USER="$user"

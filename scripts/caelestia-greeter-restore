@@ -86,8 +86,10 @@ rm -rf \
     /etc/xdg/quickshell/caelestia-greeter \
     /etc/systemd/system/greetd.service.d/caelestia-greeter.conf \
     /etc/greetd/caelestia-greeter-hyprland.conf \
+    /etc/greetd/greetd.conf \
     /etc/greetd/config.toml \
     /etc/pam.d/greetd \
+    /etc/pam.d/greetd-greeter \
     /usr/local/bin/caelestia-greeter-session \
     /usr/local/bin/caelestia-greeter-run \
     /usr/local/bin/caelestia-greeter-compositor \
@@ -100,6 +102,14 @@ rm -rf \
 
 cp -a -- "$BACKUP_DIR/files/." /
 systemctl daemon-reload
+
+# Undo the optional greeter-account hardening done by the installer.
+if [[ -n "${greeter_previous_shell:-}" ]] && getent passwd greeter >/dev/null 2>&1; then
+    usermod -s "$greeter_previous_shell" greeter
+fi
+if [[ -n "${greeter_previous_home:-}" ]] && getent passwd greeter >/dev/null 2>&1; then
+    usermod -d "$greeter_previous_home" greeter
+fi
 
 if [[ -n "$previous_dm_service" && "$previous_dm_service" != "greetd.service" ]]; then
     systemctl enable -f "$previous_dm_service"

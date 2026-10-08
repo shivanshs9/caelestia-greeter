@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
+# Started by the greeter Hyprland instance. Runs the Quickshell greeter and
+# ends the compositor once a session launch was requested or the greeter died.
 set -euo pipefail
 
-marker="${XDG_RUNTIME_DIR:-/tmp}/caelestia-greeter-launch-requested"
-rm -f "$marker"
+# The greeter touches this file right before asking greetd to start the
+# session, so this script can tell "handed off" from "crashed". The path is a
+# fresh private directory (XDG_RUNTIME_DIR is 0700 and owned by the greeter
+# account); a fixed name under /tmp could be pre-created by another user.
+marker_dir="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/caelestia-greeter.XXXXXX")"
+marker="$marker_dir/launch-requested"
+export CAELESTIA_GREETER_LAUNCH_MARKER="$marker"
+cleanup() { rm -rf -- "$marker_dir"; }
+trap cleanup EXIT
 
 status=0
 /usr/local/bin/caelestia-greeter-session || status=$?
@@ -12,5 +21,10 @@ if [[ -f "$marker" ]]; then
     exit 0
 fi
 
-printf 'Caelestia Greeter exited unexpectedly with status %s.\n' "$status" >&2
-exec /usr/bin/sleep infinity
+# Unexpected exit. Pace the retry so greetd restarts the greeter without
+# tripping its start-limit (5 starts per 30 s), instead of leaving a dead
+# compositor on the VT.
+printf 'Caelestia Greeter exited unexpectedly with status %s; restarting in 10 s.\n' "$status" >&2
+/usr/bin/sleep 10
+/usr/bin/hyprctl dispatch exit >/dev/null 2>&1 || true
+exit 1

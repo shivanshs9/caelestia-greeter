@@ -5,6 +5,7 @@
   "language": "system",
   "loginStartsOpen": false,
   "wallpaper": "caelestia",
+  "hiddenSessions": [],
   "sessions": [
     {
       "name": "Caelestia",

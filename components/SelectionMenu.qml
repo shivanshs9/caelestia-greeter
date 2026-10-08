@@ -93,6 +93,7 @@ Rectangle {
                 Text {
                     width: parent.width
                     text: root.roleValue(root.selectedOption, root.nameRole)
+                    textFormat: Text.PlainText
                     color: Theme.colorText
                     elide: Text.ElideRight
                     font.family: Theme.fontBody
@@ -104,6 +105,7 @@ Rectangle {
                     width: parent.width
                     visible: text.length > 0
                     text: root.roleValue(root.selectedOption, root.detailRole)
+                    textFormat: Text.PlainText
                     color: Theme.colorTextMuted
                     elide: Text.ElideRight
                     font.family: Theme.fontBody
@@ -197,6 +199,7 @@ Rectangle {
                                 Text {
                                     width: parent.width
                                     text: root.roleValue(optionRow.modelData, root.nameRole)
+                                    textFormat: Text.PlainText
                                     color: optionRow.index === root.selectedIndex
                                         ? Theme.colorPrimaryContainerText
                                         : Theme.colorText
@@ -210,6 +213,7 @@ Rectangle {
                                     width: parent.width
                                     visible: text.length > 0
                                     text: root.roleValue(optionRow.modelData, root.detailRole)
+                                    textFormat: Text.PlainText
                                     color: optionRow.index === root.selectedIndex
                                         ? Theme.colorPrimaryContainerText
                                         : Theme.colorTextMuted

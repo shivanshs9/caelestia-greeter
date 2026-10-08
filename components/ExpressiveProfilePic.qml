@@ -53,6 +53,7 @@ Item {
         anchors.verticalCenterOffset: 2
         visible: avatarImage.status !== Image.Ready
         text: root.fallbackText || "C"
+        textFormat: Text.PlainText
         color: Theme.colorTextMuted
         font.family: Theme.fontDisplay
         font.pixelSize: Math.round(root.centerWidth / 4)

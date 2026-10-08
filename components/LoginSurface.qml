@@ -195,6 +195,7 @@ Rectangle {
                 Text {
                     width: parent.width
                     text: root.welcomeLabel
+                    textFormat: Text.PlainText
                     color: Theme.colorText
                     elide: Text.ElideRight
                     horizontalAlignment: Text.AlignHCenter
@@ -292,6 +293,7 @@ Rectangle {
             height: root.hasMessage ? implicitHeight : 0
             visible: height > 0
             text: AuthService.errorMessage || AuthService.statusMessage
+            textFormat: Text.PlainText
             color: AuthService.errorMessage ? Theme.colorErrorText : Theme.colorTextMuted
             wrapMode: Text.Wrap
             horizontalAlignment: Text.AlignHCenter
