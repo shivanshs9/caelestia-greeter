@@ -97,9 +97,11 @@ Rectangle {
         font.pixelSize: 15
         echoMode: root.passwordMode ? TextInput.NoEcho : TextInput.Normal
         cursorVisible: !root.passwordMode && activeFocus
+        // ImhHiddenText is the hint Qt uses for password fields; it keeps
+        // input methods (fcitx, ibus) from recording or predicting the text.
         inputMethodHints: root.passwordMode
-            ? Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
-            : Qt.ImhNone
+            ? Qt.ImhHiddenText | Qt.ImhSensitiveData | Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
+            : Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
         clip: true
         onAccepted: root.accepted()
     }
@@ -246,6 +248,7 @@ Rectangle {
             : input.x
         anchors.verticalCenter: fieldBackground.verticalCenter
         text: root.placeholderText
+        textFormat: Text.PlainText
         color: Theme.colorTextMuted
         font.family: Theme.fontBody
         font.pixelSize: 15

@@ -90,6 +90,12 @@ Singleton {
         ? values.sessions
         : [{ "name": "Caelestia", "command": ["/usr/local/bin/caelestia-session"] }]
 
+    // Discovered sessions to hide, matched against the desktop file name
+    // (e.g. "sway.desktop") or the displayed name (e.g. "Sway").
+    readonly property var hiddenSessions: Array.isArray(values.hiddenSessions)
+        ? values.hiddenSessions.map(item => String(item))
+        : []
+
     readonly property string wallpaperSource: {
         let configured = env("CAELESTIA_GREETER_WALLPAPER")
             || values.wallpaper

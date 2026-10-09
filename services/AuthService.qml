@@ -21,7 +21,9 @@ Singleton {
     property bool markerPending: false
     property bool launching: false
 
-    readonly property string launchMarkerPath: `${Quickshell.env("XDG_RUNTIME_DIR") || "/tmp"}/caelestia-greeter-launch-requested`
+    // Provided by caelestia-greeter-run as a path inside a private mktemp
+    // directory. Without it (preview mode) the marker is not needed.
+    readonly property string launchMarkerPath: Quickshell.env("CAELESTIA_GREETER_LAUNCH_MARKER") || ""
     readonly property bool previewMode: {
         const value = Quickshell.env("CAELESTIA_GREETER_PREVIEW") || "";
         return value === "1" || value.toLowerCase() === "true" || !Greetd.available;
@@ -81,11 +83,31 @@ Singleton {
             Greetd.cancelSession();
     }
 
+    // greetd joins the command list with spaces and runs it through
+    // `/bin/sh -c "exec ..."`, so each argument is quoted here to keep the
+    // argv boundaries the session catalogue produced (paths with spaces,
+    // desktop-entry arguments with shell metacharacters).
+    function shellQuote(argument) {
+        const value = String(argument);
+        if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value))
+            return value;
+        return `'${value.replace(/'/g, `'\\''`)}'`;
+    }
+
+    function launchArguments() {
+        return root.launchCommand.map(part => root.shellQuote(part));
+    }
+
     function requestSessionLaunch() {
         if (!root.launchCommand.length) {
             root.busy = false;
             root.launching = false;
             root.errorMessage = I18n.t("auth.missingCommand");
+            return;
+        }
+
+        if (!root.launchMarkerPath) {
+            Greetd.launch(root.launchArguments(), [], true);
             return;
         }
 
@@ -109,7 +131,7 @@ Singleton {
                 return;
             }
 
-            Greetd.launch(root.launchCommand, [], true);
+            Greetd.launch(root.launchArguments(), [], true);
         }
     }
 
@@ -176,6 +198,9 @@ Singleton {
         }
 
         function onError(error) {
+            // Drop the buffered password as soon as the session attempt fails.
+            root.pendingResponse = "";
+            root.launchCommand = [];
             root.busy = false;
             root.awaitingResponse = false;
             root.markerPending = false;

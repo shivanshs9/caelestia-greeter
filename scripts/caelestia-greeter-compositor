@@ -22,11 +22,15 @@ if [[ -z "${XDG_CACHE_HOME:-}" || ! -d "$XDG_CACHE_HOME" || ! -w "$XDG_CACHE_HOM
     export XDG_CACHE_HOME="$cache_dir"
 fi
 
-if ! mkdir -p "$XDG_CACHE_HOME" 2>/dev/null || [[ ! -w "$XDG_CACHE_HOME" ]]; then
-    export XDG_CACHE_HOME="/tmp/caelestia-greeter-cache-$service_uid"
-    mkdir -p "$XDG_CACHE_HOME"
-    chmod 0700 "$XDG_CACHE_HOME"
+if ! mkdir -p "$XDG_CACHE_HOME" 2>/dev/null || [[ ! -w "$XDG_CACHE_HOME" || -L "$XDG_CACHE_HOME" ]]; then
+    # The Lua config written below is executed by Hyprland, so it must live
+    # in a directory nobody else could have pre-created. mktemp gives a
+    # private, unpredictable path; a fixed /tmp name would let another local
+    # account own the directory.
+    XDG_CACHE_HOME="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/caelestia-greeter-cache.XXXXXX")"
+    export XDG_CACHE_HOME
 fi
+chmod 0700 "$XDG_CACHE_HOME" 2>/dev/null || true
 
 export XDG_CURRENT_DESKTOP=Hyprland
 export XDG_SESSION_DESKTOP=Hyprland
@@ -35,7 +39,40 @@ export XDG_SESSION_TYPE=wayland
 hyprland_config="${CAELESTIA_GREETER_HYPRLAND_CONFIG:-$XDG_CACHE_HOME/caelestia-greeter-hyprland.lua}"
 config_tmp="${hyprland_config}.tmp.$$"
 
-cat > "$config_tmp" <<'LUA'
+# Keyboard layout follows the system console settings (localectl writes them
+# to /etc/vconsole.conf). Values are embedded in a Lua string, so only the
+# characters XKB names use are kept.
+xkb_sanitize() {
+    local value="$1"
+    value="${value//[^A-Za-z0-9_,:+()-]/}"
+    printf '%s' "$value"
+}
+
+XKBLAYOUT="" XKBVARIANT="" XKBMODEL="" XKBOPTIONS=""
+vconsole="${CAELESTIA_GREETER_VCONSOLE:-/etc/vconsole.conf}"
+if [[ -r "$vconsole" ]]; then
+    while IFS='=' read -r key value; do
+        value="${value%\"}"
+        value="${value#\"}"
+        case "$key" in
+            XKBLAYOUT) XKBLAYOUT="$(xkb_sanitize "$value")" ;;
+            XKBVARIANT) XKBVARIANT="$(xkb_sanitize "$value")" ;;
+            XKBMODEL) XKBMODEL="$(xkb_sanitize "$value")" ;;
+            XKBOPTIONS) XKBOPTIONS="$(xkb_sanitize "$value")" ;;
+        esac
+    done < "$vconsole"
+fi
+kb_layout="${CAELESTIA_GREETER_KB_LAYOUT:-${XKBLAYOUT:-us}}"
+kb_variant="${CAELESTIA_GREETER_KB_VARIANT:-$XKBVARIANT}"
+kb_model="${CAELESTIA_GREETER_KB_MODEL:-$XKBMODEL}"
+kb_options="${CAELESTIA_GREETER_KB_OPTIONS:-$XKBOPTIONS}"
+kb_layout="$(xkb_sanitize "$kb_layout")"
+kb_variant="$(xkb_sanitize "$kb_variant")"
+kb_model="$(xkb_sanitize "$kb_model")"
+kb_options="$(xkb_sanitize "$kb_options")"
+
+{
+cat <<LUA
 hl.monitor({
     output = "",
     mode = "preferred",
@@ -45,12 +82,24 @@ hl.monitor({
 
 hl.config({
     input = {
-        kb_layout = "br",
+        kb_layout = "${kb_layout:-us}",
+        kb_variant = "$kb_variant",
+        kb_model = "$kb_model",
+        kb_options = "$kb_options",
     },
+LUA
+cat <<'LUA'
     misc = {
         disable_hyprland_logo = true,
         disable_splash_rendering = true,
         force_default_wallpaper = 0,
+        disable_autoreload = true,
+    },
+    -- Hyprland's update-news and donation windows must never appear on the
+    -- login screen; they are interactive windows outside the greeter.
+    ecosystem = {
+        no_update_news = true,
+        no_donation_nag = true,
     },
     animations = {
         enabled = false,
@@ -69,7 +118,10 @@ hl.config({
 hl.on("hyprland.start", function()
     hl.exec_cmd("/usr/local/bin/caelestia-greeter-run")
 end)
+-- No keybinds are defined on purpose: nothing may be spawned from the login
+-- screen other than the greeter itself.
 LUA
+} > "$config_tmp"
 
 chmod 0600 "$config_tmp"
 mv -f "$config_tmp" "$hyprland_config"

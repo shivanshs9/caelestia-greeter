@@ -55,6 +55,7 @@ Rectangle {
 
         anchors.centerIn: parent
         text: root.text
+        textFormat: Text.PlainText
         color: {
             if (root.destructive)
                 return Theme.colorErrorContainerText;

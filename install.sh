@@ -10,6 +10,12 @@ CACHE_DIR="/var/cache/caelestia-greeter"
 RUNTIME_DIR="/run/caelestia-greeter"
 SYSTEMD_DROPIN_DIR="/etc/systemd/system/greetd.service.d"
 LEGACY_HYPRLAND_CONF="/etc/greetd/caelestia-greeter-hyprland.conf"
+# greetd reads greetd.conf before config.toml; package upgrades only replace
+# config.toml, so greetd.conf is the file that survives.
+GREETD_CONF="/etc/greetd/greetd.conf"
+LEGACY_GREETD_TOML="/etc/greetd/config.toml"
+PAM_GREETER_FILE="/etc/pam.d/greetd-greeter"
+GREETER_USER="greeter"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ASSUME_YES=0
@@ -87,12 +93,19 @@ if [[ "$LANGUAGE" == "pt-BR" ]]; then
     T_TARGET_USER="Perfil do Caelestia usado"
     T_BACKUP_EXPLAIN="Será criado um backup dos arquivos e do estado do gerenciador atual"
     T_DISABLE_EXPLAIN="O gerenciador atual será desativado para o próximo boot; ele NÃO será interrompido nesta sessão"
-    T_INSTALL_EXPLAIN="Os arquivos QML, scripts, wrapper Lua do Hyprland e configuração do greetd serão instalados"
+    T_INSTALL_EXPLAIN="Os arquivos QML, scripts, wrapper Lua do Hyprland e /etc/greetd/greetd.conf serão instalados"
     T_CLEANUP_EXPLAIN="A configuração Hyprlang legada será removida depois de ser incluída no backup"
+    T_PAM_GREETER_EXPLAIN="Um serviço PAM dedicado (/etc/pam.d/greetd-greeter) isolará o início do greeter do system-auth, caso ainda não exista"
     T_CACHE_EXPLAIN="Avatar, wallpaper, paleta, configuração do Shell e fonte serão copiados para um cache legível pelo usuário restrito do greetd"
     T_PAM_EXPLAIN="A integração PAM do GNOME Keyring será configurada quando o módulo estiver disponível"
     T_ENABLE_EXPLAIN="O greetd será habilitado como gerenciador de login padrão para o próximo boot"
     T_RESTORE_EXPLAIN="Um comando de restauração será instalado para reativar o gerenciador anterior"
+    T_GREETER_ACCOUNT="Reforçar a conta '$GREETER_USER'"
+    T_GREETER_ACCOUNT_SHELL="A conta tem um shell de login (%s). O greeter nunca usa um shell; trocá-lo por nologin impede que a conta seja usada interativamente se for comprometida."
+    T_GREETER_ACCOUNT_HOME="A conta tem HOME=%s. O greetd carrega \$HOME/.profile e o Quickshell grava caches em \$HOME; um diretório próprio evita que isso aconteça na raiz do sistema."
+    T_GREETER_ACCOUNT_ASK="Aplicar estas alterações agora? [s/N]"
+    T_GREETER_ACCOUNT_SKIP="Conta mantida como está. Para aplicar depois: %s"
+    T_GREETER_ACCOUNT_DONE="Conta reforçada; os valores anteriores foram gravados no backup para o restore."
     T_CONFIRM="Digite INSTALAR para continuar"
     T_CANCEL="Instalação cancelada. Nenhuma alteração foi realizada."
     T_BACKUP="Criando backup do gerenciador atual e da instalação existente"
@@ -122,12 +135,19 @@ else
     T_TARGET_USER="Caelestia profile used"
     T_BACKUP_EXPLAIN="A backup of the current manager's files and service state will be created"
     T_DISABLE_EXPLAIN="The current manager will be disabled for the next boot; it will NOT be stopped in this session"
-    T_INSTALL_EXPLAIN="The QML files, scripts, Hyprland Lua wrapper and greetd configuration will be installed"
+    T_INSTALL_EXPLAIN="The QML files, scripts, Hyprland Lua wrapper and /etc/greetd/greetd.conf will be installed"
     T_CLEANUP_EXPLAIN="The legacy Hyprlang configuration will be removed after it is included in the backup"
+    T_PAM_GREETER_EXPLAIN="A dedicated PAM service (/etc/pam.d/greetd-greeter) will isolate greeter start-up from system-auth, unless one already exists"
     T_CACHE_EXPLAIN="Avatar, wallpaper, palette, Shell configuration and font will be copied to a cache readable by greetd's restricted user"
     T_PAM_EXPLAIN="GNOME Keyring PAM integration will be configured when the module is available"
     T_ENABLE_EXPLAIN="greetd will be enabled as the default login manager for the next boot"
     T_RESTORE_EXPLAIN="A restore command will be installed to reactivate the previous manager"
+    T_GREETER_ACCOUNT="Harden the '$GREETER_USER' account"
+    T_GREETER_ACCOUNT_SHELL="The account has a login shell (%s). The greeter never uses a shell; switching it to nologin stops the account from being used interactively if it is ever compromised."
+    T_GREETER_ACCOUNT_HOME="The account has HOME=%s. greetd sources \$HOME/.profile and Quickshell writes caches under \$HOME; a dedicated directory keeps that out of the filesystem root."
+    T_GREETER_ACCOUNT_ASK="Apply these changes now? [y/N]"
+    T_GREETER_ACCOUNT_SKIP="Account left unchanged. To apply later: %s"
+    T_GREETER_ACCOUNT_DONE="Account hardened; previous values were recorded in the backup for restore."
     T_CONFIRM="Type INSTALL to continue"
     T_CANCEL="Installation cancelled. No changes were made."
     T_BACKUP="Backing up the current login manager and existing installation"
@@ -151,6 +171,63 @@ bold() { printf '\033[1m%s\033[0m' "$*"; }
 info() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Distribution packages create the greetd account with varying settings; Arch's
+# sysusers entry gives it /bin/bash and no home (so HOME=/). Neither is needed
+# by the greeter. Offer to fix both, record the old values in the backup
+# metadata so the restore command can put them back, and never change the
+# account silently (--yes only skips the plan confirmation).
+harden_greeter_account() {
+    local home shell nologin_shell fixes=() cmds=()
+    IFS=: read -r _ _ _ _ _ home shell < <(getent passwd "$GREETER_USER")
+    nologin_shell="$(command -v nologin || true)"
+    nologin_shell="${nologin_shell:-/bin/false}"
+
+    if [[ ! "$shell" =~ (nologin|false)$ ]]; then
+        # shellcheck disable=SC2059
+        fixes+=("$(printf "$T_GREETER_ACCOUNT_SHELL" "$shell")")
+        cmds+=("usermod -s $nologin_shell $GREETER_USER")
+    fi
+    if [[ -z "$home" || "$home" == "/" ]]; then
+        # shellcheck disable=SC2059
+        fixes+=("$(printf "$T_GREETER_ACCOUNT_HOME" "${home:-<empty>}")")
+        cmds+=("usermod -d /var/lib/greeter $GREETER_USER")
+    fi
+    ((${#fixes[@]})) || return 0
+
+    printf '\n\033[1m%s\033[0m\n' "$T_GREETER_ACCOUNT"
+    local line
+    for line in "${fixes[@]}"; do printf '  - %s\n' "$line"; done
+    printf '\n'
+
+    local answer=""
+    if [[ -t 0 ]]; then
+        read -r -p "$T_GREETER_ACCOUNT_ASK " answer
+    fi
+    if [[ ! "$answer" =~ ^([yYsS])$ ]]; then
+        local joined
+        printf -v joined '%s; ' "${cmds[@]}"
+        # shellcheck disable=SC2059
+        warn "$(printf "$T_GREETER_ACCOUNT_SKIP" "${joined%; }")"
+        return 0
+    fi
+
+    require_command usermod
+    {
+        printf 'greeter_previous_home=%q\n' "$home"
+        printf 'greeter_previous_shell=%q\n' "$shell"
+    } >> "$BACKUP_DIR/metadata.env"
+    if [[ ! "$shell" =~ (nologin|false)$ ]]; then
+        usermod -s "$nologin_shell" "$GREETER_USER"
+    fi
+    if [[ -z "$home" || "$home" == "/" ]]; then
+        # Do not -m (move): moving / would be catastrophic; the directory is
+        # created fresh and owned by the account instead.
+        install -d -m 0750 -o "$GREETER_USER" -g "$GREETER_USER" /var/lib/greeter
+        usermod -d /var/lib/greeter "$GREETER_USER"
+    fi
+    info "$T_GREETER_ACCOUNT_DONE"
+}
 
 CURRENT_STEP="startup"
 on_error() {
@@ -276,6 +353,7 @@ collect_backup() {
     local generic_paths=(
         /etc/systemd/system/display-manager.service
         /etc/pam.d/greetd
+        "$PAM_GREETER_FILE"
         /etc/greetd
         /etc/xdg/quickshell/caelestia-greeter
         /etc/systemd/system/greetd.service.d
@@ -356,7 +434,8 @@ validate_project_files() {
         scripts/caelestia-greeter-profile-sync
         scripts/caelestia-greeter-restore
         scripts/caelestia-session
-        packaging/greetd/config.toml
+        packaging/greetd/greetd.conf
+        packaging/pam.d/greetd-greeter
         packaging/systemd/greetd-caelestia-greeter.conf
     )
     local entry
@@ -366,8 +445,22 @@ validate_project_files() {
 
     validate_lua_wrapper "$SCRIPT_DIR/scripts/caelestia-greeter-compositor"
     grep -Fq 'command = "/usr/local/bin/caelestia-greeter-compositor"' \
-        "$SCRIPT_DIR/packaging/greetd/config.toml" \
+        "$SCRIPT_DIR/packaging/greetd/greetd.conf" \
         || die "greetd config does not launch caelestia-greeter-compositor."
+    grep -Fq "user = \"$GREETER_USER\"" "$SCRIPT_DIR/packaging/greetd/greetd.conf" \
+        || die "greetd config does not run the greeter as '$GREETER_USER'."
+}
+
+# greetd starts the greeter process through the PAM service "greetd-greeter"
+# when /etc/pam.d/greetd-greeter exists, and falls back to "greetd" (which
+# includes system-auth) otherwise. Installing a dedicated file keeps biometric
+# modules in system-auth from blocking the login screen.
+configure_pam_greeter() {
+    if [[ -e "$PAM_GREETER_FILE" ]]; then
+        info "Keeping the existing $PAM_GREETER_FILE."
+        return
+    fi
+    install -Dm0644 "$SCRIPT_DIR/packaging/pam.d/greetd-greeter" "$PAM_GREETER_FILE"
 }
 
 configure_pam_keyring() {
@@ -431,9 +524,22 @@ install_project() {
         install -Dm0755 "$SCRIPT_DIR/scripts/$script" "/usr/local/bin/$script"
     done
 
-    install -Dm0644 "$SCRIPT_DIR/packaging/greetd/config.toml" \
-        /etc/greetd/config.toml
-    install -Dm0644 "$SCRIPT_DIR/packaging/systemd/greetd-caelestia-greeter.conf" \
+    install -Dm0644 "$SCRIPT_DIR/packaging/greetd/greetd.conf" "$GREETD_CONF"
+
+    # A 1.0.x install wrote config.toml; greetd ignores it once greetd.conf
+    # exists, but leave no stale copy pointing at this greeter.
+    if [[ -f "$LEGACY_GREETD_TOML" ]] \
+        && grep -Fq 'caelestia-greeter-compositor' "$LEGACY_GREETD_TOML"; then
+        rm -f -- "$LEGACY_GREETD_TOML"
+    fi
+
+    install -d -m 0755 "$SYSTEMD_DROPIN_DIR"
+    {
+        cat "$SCRIPT_DIR/packaging/systemd/greetd-caelestia-greeter.conf"
+        printf 'Environment=CAELESTIA_GREETER_USER=%s\n' "$TARGET_USER"
+    } > "$SYSTEMD_DROPIN_DIR/caelestia-greeter.conf.tmp"
+    chmod 0644 "$SYSTEMD_DROPIN_DIR/caelestia-greeter.conf.tmp"
+    mv -f -- "$SYSTEMD_DROPIN_DIR/caelestia-greeter.conf.tmp" \
         "$SYSTEMD_DROPIN_DIR/caelestia-greeter.conf"
 
     # The compositor now generates its Lua configuration in the greeter's
@@ -453,9 +559,17 @@ verify_installation() {
         [[ -x "/usr/local/bin/$script" ]] || die "Installed script is missing or not executable: $script"
     done
 
-    [[ -r /etc/greetd/config.toml ]] || die "Installed greetd config is missing."
-    grep -Fq 'command = "/usr/local/bin/caelestia-greeter-compositor"' /etc/greetd/config.toml \
+    [[ -r "$INSTALL_DIR/services/catalog.py" ]] || die "Installed catalogue script is missing."
+    python3 -c 'import ast, sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' \
+        "$INSTALL_DIR/services/catalog.py" \
+        || die "Installed catalogue script does not compile."
+    [[ -r "$GREETD_CONF" ]] || die "Installed greetd config is missing: $GREETD_CONF"
+    grep -Fq 'command = "/usr/local/bin/caelestia-greeter-compositor"' "$GREETD_CONF" \
         || die "Installed greetd config does not launch the compositor wrapper."
+    grep -Fq "Environment=CAELESTIA_GREETER_USER=$TARGET_USER" \
+        "$SYSTEMD_DROPIN_DIR/caelestia-greeter.conf" \
+        || die "systemd drop-in does not pin the profile user."
+    [[ -r "$PAM_GREETER_FILE" ]] || die "PAM service for the greeter is missing: $PAM_GREETER_FILE"
     [[ ! -e "$LEGACY_HYPRLAND_CONF" ]] \
         || die "Legacy Hyprland .conf file is still installed."
 
@@ -512,11 +626,12 @@ printf '  4. %s.\n' "$T_DISABLE_EXPLAIN"
 printf '  5. %s.\n' "$T_INSTALL_EXPLAIN"
 printf '  6. %s.\n' "$T_CLEANUP_EXPLAIN"
 printf '  7. %s.\n' "$T_CACHE_EXPLAIN"
+printf '  8. %s.\n' "$T_PAM_GREETER_EXPLAIN"
 if ((CONFIGURE_KEYRING)); then
-    printf '  8. %s.\n' "$T_PAM_EXPLAIN"
+    printf '  9. %s.\n' "$T_PAM_EXPLAIN"
 fi
-printf '  9. %s.\n' "$T_ENABLE_EXPLAIN"
-printf ' 10. %s.\n' "$T_RESTORE_EXPLAIN"
+printf ' 10. %s.\n' "$T_ENABLE_EXPLAIN"
+printf ' 11. %s.\n' "$T_RESTORE_EXPLAIN"
 printf '\n'
 
 if ((ASSUME_YES == 0)); then
@@ -555,25 +670,34 @@ chmod 0600 "$BACKUP_DIR/metadata.env"
 
 CURRENT_STEP="$T_INSTALL_FILES"
 info "$CURRENT_STEP"
-if ! getent passwd greeter >/dev/null 2>&1; then
+if ! getent passwd "$GREETER_USER" >/dev/null 2>&1; then
     require_command useradd
     nologin_shell="$(command -v nologin || true)"
     nologin_shell="${nologin_shell:-/bin/false}"
-    useradd --system --home-dir /var/lib/greeter --create-home --shell "$nologin_shell" greeter
+    useradd --system --home-dir /var/lib/greeter --create-home --shell "$nologin_shell" "$GREETER_USER"
+else
+    harden_greeter_account
+fi
+# The greeter compositor needs DRM/input access through logind; the video
+# group covers distributions whose logind does not hand out the devices.
+if ! id -nG "$GREETER_USER" | tr ' ' '\n' | grep -Fxq video; then
+    usermod -aG video "$GREETER_USER" 2>/dev/null || warn "Could not add $GREETER_USER to the video group."
 fi
 install_project
+
+CURRENT_STEP="$T_PAM"
+info "$CURRENT_STEP"
+configure_pam_greeter
+configure_pam_keyring
 
 CURRENT_STEP="$T_VERIFY"
 info "$CURRENT_STEP"
 verify_installation
 
-CURRENT_STEP="$T_PAM"
-info "$CURRENT_STEP"
-configure_pam_keyring
-
 CURRENT_STEP="$T_SYNC"
 info "$CURRENT_STEP"
-install -d -m 0755 "$BACKUP_BASE" "$CACHE_DIR" "$RUNTIME_DIR"
+install -d -m 0755 "$BACKUP_BASE" "$RUNTIME_DIR"
+# profile-sync owns $CACHE_DIR permissions (root:greeter 0750).
 CAELESTIA_GREETER_USER="$TARGET_USER" /usr/local/bin/caelestia-greeter-profile-sync
 
 CURRENT_STEP="$T_SWITCH"

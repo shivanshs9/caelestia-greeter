@@ -1,0 +1,17 @@
+#%PAM-1.0
+# PAM service greetd uses to start the greeter process itself (not for user
+# logins, which go through /etc/pam.d/greetd).
+#
+# Kept independent from system-auth on purpose: biometric modules placed there
+# (pam_visage, pam_howdy, pam_fprintd) return PAM_IGNORE from pam_setcred, which
+# greetd treats as PERM_DENIED, and the login screen never appears.
+auth      required   pam_succeed_if.so   user = greeter quiet
+auth      required   pam_permit.so
+
+account   required   pam_succeed_if.so   user = greeter quiet
+account   required   pam_permit.so
+
+password  required   pam_deny.so
+
+session   optional   pam_keyinit.so      force revoke
+session   include    system-login
